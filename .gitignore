@@ -8,3 +8,5 @@ data/output/
 *.csv
 .venv/
 venv/
+data/*.log
+.pytest_cache/

@@ -1,0 +1,39 @@
+[
+  {
+    "market_hash_name": "AK-47 | Redline (Field-Tested)",
+    "steam": {
+      "ask": 10.2,
+      "bid": 9.85,
+      "bid_volume": 12,
+      "ask_volume": 305,
+      "updated_at": "2026-06-10T12:02:00Z"
+    },
+    "buff": {"ask": 8.45, "ask_volume": 1002, "bid": 8.1, "bid_volume": 21, "updated_at": "2026-06-10T11:59:00Z"},
+    "skinport": {
+      "ask": 9.1,
+      "ask_volume": 57,
+      "24h_history": {"price": 8.9, "mean_price": 9.0, "median_price": 9.05, "volume": 42},
+      "7d_history": {"price": 8.5, "mean_price": 9.1, "median_price": 9.0, "volume": 260}
+    },
+    "csfloat": {"ask": 8.9, "ask_volume": 345},
+    "youpin": {"ask": 8.6, "ask_volume": 1123, "bid": null, "bid_volume": null},
+    "c5game": {"ask": 8.8, "ask_volume": 237, "bid": 17.0}
+  },
+  {
+    "market_hash_name": "AWP | Asiimov (Field-Tested)",
+    "steam": {
+      "ask": 95.5,
+      "bid": null,
+      "bid_volume": null,
+      "collected_at": "2026-06-10T12:02:00Z"
+    },
+    "skinport": {"ask": 84.0}
+  },
+  {
+    "market_hash_name": "Knife | Steam Only",
+    "steam": {"ask": 250.0, "bid": 240.0, "bid_volume": 2}
+  },
+  {
+    "steam": {"ask": 1.0}
+  }
+]

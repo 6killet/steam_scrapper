@@ -2,7 +2,10 @@
 
 Endpoint: POST /v1/prices/latest
 Auth:     Authorization: Bearer <API_KEY>
-Body:     {"names": ["market_hash_name", ...]}
+Body:     {"items": ["market_hash_name", ...]}   # non-empty list is required
+
+Plan tiers: the basic plan only allows /v1/prices/latest; the full catalog
+(GET /v1/items, used for universe mode) requires the Scale plan.
 
 Response schema:
 {
@@ -78,14 +81,15 @@ class CS2SHSource(MarketSource):
             logger.warning("[cs2sh] CS2SH_API_KEY not set — skipping")
             return []
 
+        if not items:
+            return []
         data = await self._fetch_with_retry(
             _BASE_URL + "/v1/prices/latest",
-            payload={"names": items},
+            payload={"items": items},
         )
         if data is None:
             return []
-
-        items_data: dict = data.get("items", {})
+        items_data = data.get("items", {})
         if not isinstance(items_data, dict):
             logger.error("[cs2sh] Unexpected 'items' type: %s", type(items_data).__name__)
             return []
@@ -97,6 +101,56 @@ class CS2SHSource(MarketSource):
                 entry.update(marketplace_prices)
                 result.append(entry)
         return result
+
+    async def fetch_universe_items(
+        self,
+        min_price_usd: float,
+        max_price_usd: float,
+        max_items: int,
+    ) -> list[str]:
+        """Return market_hash_names for universe mode via GET /v1/items.
+
+        Requires the cs2.sh Scale plan; on 403 logs a clear message and
+        returns [] so main falls back to file mode. Price filtering happens
+        later in the pipeline (the catalog endpoint returns names only).
+        """
+        if not settings.CS2SH_API_KEY:
+            return []
+        session = await self._session_()
+        await self._limiter.acquire()
+        try:
+            async with session.get(
+                _BASE_URL + "/v1/items",
+                headers=self._headers(),
+                timeout=aiohttp.ClientTimeout(total=60),
+            ) as resp:
+                if resp.status == 403:
+                    logger.warning(
+                        "[cs2sh] Catalog endpoint needs the Scale plan — "
+                        "universe mode unavailable on the current tier"
+                    )
+                    return []
+                resp.raise_for_status()
+                data = await resp.json(content_type=None)
+        except (asyncio.TimeoutError, aiohttp.ClientError) as exc:
+            logger.warning("[cs2sh] Catalog request failed: %s", exc)
+            return []
+
+        # Schema is unknown until a Scale key is available — accept both a
+        # bare list of names and an {"items": [...]} / {"items": {...}} wrapper.
+        if isinstance(data, dict):
+            data = data.get("items", [])
+        if isinstance(data, dict):
+            names = [n for n in data if isinstance(n, str)]
+        elif isinstance(data, list):
+            names = [
+                n if isinstance(n, str) else n.get("market_hash_name", "")
+                for n in data
+                if isinstance(n, (str, dict))
+            ]
+        else:
+            names = []
+        return [n for n in names if n][:max_items]
 
     async def _fetch_with_retry(
         self, url: str, payload: dict | None = None

@@ -14,6 +14,7 @@ Note: Pricempire also offers a v4 paid endpoint (/v4/paid/items/prices).
 
 import asyncio
 import logging
+import time
 from typing import Any
 
 import aiohttp
@@ -34,6 +35,10 @@ class PricempireSource(MarketSource):
     def __init__(self) -> None:
         self._limiter = RateLimiter("pricempire", settings.PRICEMPIRE_MIN_DELAY)
         self._session: aiohttp.ClientSession | None = None
+        # Bulk response cache: universe mode would otherwise fetch the same
+        # full price list twice per pass (item list + prices).
+        self._bulk_cache: dict | None = None
+        self._bulk_cache_at: float = 0.0
 
     async def _session_(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
@@ -49,26 +54,64 @@ class PricempireSource(MarketSource):
             logger.warning("[pricempire] PRICEMPIRE_API_TOKEN not set — skipping")
             return []
 
+        raw = await self._fetch_bulk()
+        if raw is None:
+            return []
+
+        items_set = set(items)
+        result: list[dict[str, Any]] = []
+        for name, prices in raw.items():
+            if isinstance(prices, dict) and (not items_set or name in items_set):
+                result.append({"market_hash_name": name, "prices": prices})
+        return result
+
+    async def fetch_universe_items(
+        self,
+        min_price_usd: float,
+        max_price_usd: float,
+        max_items: int,
+    ) -> list[str]:
+        """Return market_hash_names filtered by approximate Steam price range."""
+        all_items = await self.fetch_prices([])
+        result: list[str] = []
+        for item in all_items:
+            steam = item.get("prices", {}).get("steam", {})
+            price_cents = steam.get("price")
+            if price_cents is None:
+                continue
+            price_usd = price_cents / 100
+            if min_price_usd <= price_usd <= max_price_usd:
+                result.append(item["market_hash_name"])
+        return result[:max_items]
+
+    async def _fetch_bulk(self) -> dict | None:
+        """Fetch the full price list, reusing a recent response within the TTL."""
+        if (
+            self._bulk_cache is not None
+            and time.monotonic() - self._bulk_cache_at < settings.PRICEMPIRE_CACHE_TTL
+        ):
+            logger.debug("[pricempire] Using cached bulk response")
+            return self._bulk_cache
+
         params = {
             "api_token": settings.PRICEMPIRE_API_TOKEN,
             "sources[]": _SOURCES.split(","),
             "currency": "USD",
         }
-
         raw = await self._fetch_with_retry(_BASE_URL + "/v3/items/prices", params=params)
         if raw is None:
-            return []
+            return None
 
         # Unwrap possible {"data": {...}} wrapper
         if isinstance(raw, dict) and "data" in raw and isinstance(raw["data"], dict):
             raw = raw["data"]
+        if not isinstance(raw, dict):
+            logger.error("[pricempire] Unexpected response type: %s", type(raw).__name__)
+            return None
 
-        items_set = set(items)
-        result: list[dict[str, Any]] = []
-        for name, prices in raw.items():
-            if name in items_set and isinstance(prices, dict):
-                result.append({"market_hash_name": name, "prices": prices})
-        return result
+        self._bulk_cache = raw
+        self._bulk_cache_at = time.monotonic()
+        return raw
 
     async def _fetch_with_retry(
         self, url: str, params: dict | None = None

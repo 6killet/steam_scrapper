@@ -1,114 +1,159 @@
 """Aggregates MarketPrice records per item and produces ScoredOpportunity.
 
-Score formula (0–100):
-    score = roi_score + liquidity_score - risk_score   (clamped to [0, 100])
+Two ROI metrics (buff2steam pattern):
+  roi_realistic  — buy external, sell via Steam buy order (instant cashout)
+                   = (subtract_fee(steam_buy_order) - ext_price) / ext_price
+  roi_optimistic — buy external, list on Steam Market and wait
+                   = (subtract_fee(steam_sell_listing) - ext_price) / ext_price
 
-ROI score (max 60):
-    < 0%        →  0
-    0–1%        → 10
-    1–3%        → 25
-    3–5%        → 40
-    > 5%        → 60
+Score (0–100) and sort key: roi_realistic.
+Items without any steam_buy_order are marked incomplete=True and excluded
+from the default top; pass include_incomplete=True to include them.
 
-Liquidity score (max 40):
-    volume_24h < 10   →  0
-    10–49             → 10
-    50–199            → 25
-    ≥ 200             → 40
+Score formula:
+    score = roi_score + liquidity_score - risk_score   (clamped [0, 100])
 
-Risk penalty:
-    no volume data    → +30
-    volume_24h < 5    → +30
-    no sell price     → +50
-    no buy price      → +50
+ROI score (max 60):    < 0% → 0 | 0–1% → 10 | 1–3% → 25 | 3–5% → 40 | >5% → 60
+Liquidity score (40):  <10 → 0  | 10–49 → 10 | 50–199 → 25 | ≥200 → 40
+Risk penalty:          no volume → +30 | vol<5 → +30 | no sell → +50 | no buy → +50
 """
 
 import logging
 from datetime import datetime, timezone
-from typing import Optional
+from decimal import Decimal
 
 from models.market import MarketPrice, ScoredOpportunity
+from services.history_analyzer import HistoryResult, compute_weighted_ratio
+from services.steam_fee import subtract_fee
 
 logger = logging.getLogger(__name__)
 
 
 class Scorer:
-    def __init__(self, steam_sell_fee: float = 0.13) -> None:
-        self.fee = steam_sell_fee
+    def __init__(self, steam_sell_fee: float = 0.13, stability_weight: int = 10) -> None:
+        self._legacy_fee = steam_sell_fee  # kept only for fallback / legacy callers
+        self.stability_weight = stability_weight
 
     def score_all(
-        self, prices_by_item: dict[str, list[MarketPrice]]
+        self,
+        prices_by_item: dict[str, list[MarketPrice]],
+        include_incomplete: bool = False,
+        history_by_item: dict[str, HistoryResult] | None = None,
     ) -> list[ScoredOpportunity]:
-        return [
-            opp
-            for name, prices in prices_by_item.items()
-            if (opp := self._score_item(name, prices)) is not None
-        ]
+        results = []
+        for name, prices in prices_by_item.items():
+            hist = history_by_item.get(name) if history_by_item else None
+            opp = self._score_item(name, prices, hist)
+            if opp is None:
+                continue
+            if opp.incomplete and not include_incomplete:
+                continue
+            results.append(opp)
+        return results
 
     def _score_item(
-        self, name: str, prices: list[MarketPrice]
-    ) -> Optional[ScoredOpportunity]:
+        self, name: str, prices: list[MarketPrice], hist: HistoryResult | None = None
+    ) -> ScoredOpportunity | None:
         if not prices:
             return None
 
         sources = sorted({p.source for p in prices})
 
-        # Best buy price: cheapest across all sources
-        buys = [p.buy_price for p in prices if p.buy_price]
-        buy_price = min(buys) if buys else None
+        # ── Best external buy price ───────────────────────────────────────────
+        # buy_market = marketplace name when the source reported it, else source name
+        buy_candidates = [
+            (p.buy_price, p.buy_market or p.source) for p in prices if p.buy_price
+        ]
+        if buy_candidates:
+            ext_price, buy_market = min(buy_candidates, key=lambda x: x[0])
+        else:
+            ext_price, buy_market = None, None
 
-        # Best sell price: highest reliable Steam price across sources
-        steam_prices = [p.steam_price for p in prices if p.steam_price]
-        sell_candidates = [p.sell_price for p in prices if p.sell_price]
-        sell_price = (
-            max(steam_prices) if steam_prices
-            else max(sell_candidates) if sell_candidates
-            else None
-        )
+        # ── Steam prices ──────────────────────────────────────────────────────
+        buy_orders = [p.steam_buy_order for p in prices if p.steam_buy_order]
+        steam_buy_order = max(buy_orders) if buy_orders else None
 
-        # Volume: take the maximum reported value across sources
-        vols_24h = [p.volume_24h for p in prices if p.volume_24h is not None]
-        volume_24h = max(vols_24h) if vols_24h else None
+        sell_listings = [p.sell_price for p in prices if p.sell_price]
+        steam_sell_listing = max(sell_listings) if sell_listings else None
 
-        # Financial calculations
-        net_sell: float | None = sell_price * (1.0 - self.fee) if sell_price else None
-        profit: float | None = (
-            net_sell - buy_price
-            if (net_sell is not None and buy_price is not None)
-            else None
-        )
-        roi: float | None = (
-            profit / buy_price
-            if (profit is not None and buy_price and buy_price > 0)
-            else None
-        )
+        # ── Volume ────────────────────────────────────────────────────────────
+        vols = [p.volume_24h for p in prices if p.volume_24h is not None]
+        volume_24h = max(vols) if vols else None
 
-        # Scoring
-        roi_score = self._roi_score(roi)
+        # ── Economics with exact Steam fee ────────────────────────────────────
+        # Realistic: instant cashout via buy order
+        net_realistic: float | None = None
+        roi_realistic: float | None = None
+        net_profit_usd: float | None = None
+        if steam_buy_order and ext_price:
+            net_r = float(subtract_fee(Decimal(str(steam_buy_order))))
+            net_realistic = net_r
+            roi_realistic = (net_r - ext_price) / ext_price
+            net_profit_usd = net_r - ext_price
+
+        # Optimistic: list on Steam, wait for sale
+        net_optimistic: float | None = None
+        roi_optimistic: float | None = None
+        if steam_sell_listing and ext_price:
+            net_o = float(subtract_fee(Decimal(str(steam_sell_listing))))
+            net_optimistic = net_o
+            roi_optimistic = (net_o - ext_price) / ext_price
+
+        # ── Scoring (driven by roi_realistic) ─────────────────────────────────
+        roi_for_score = roi_realistic if roi_realistic is not None else roi_optimistic
+        roi_score = self._roi_score(roi_for_score)
         liq_score = self._liquidity_score(volume_24h)
-        risk_penalty = self._risk_penalty(buy_price, sell_price, volume_24h)
-        score = max(0, min(100, roi_score + liq_score - risk_penalty))
+        risk = self._risk_penalty(ext_price, steam_sell_listing, volume_24h, steam_buy_order)
+        score = max(0, min(100, roi_score + liq_score - risk))
 
-        reason = self._reason(roi, volume_24h, buy_price, sell_price)
+        incomplete = steam_buy_order is None
+        qty_unknown = not any(p.buy_order_qty is not None for p in prices)
+        reason = self._reason(roi_realistic, roi_optimistic, volume_24h, ext_price, steam_buy_order)
         updated_at = max((p.updated_at for p in prices), default=datetime.now(timezone.utc))
+
+        # ── Stage 4 — history enrichment ─────────────────────────────────────
+        is_stable: bool | None = None
+        stability_cv: float | None = None
+        suggested_sell_price: float | None = None
+        history_insufficient = False
+        if hist is not None:
+            is_stable = hist.is_stable
+            stability_cv = hist.stability_cv
+            suggested_sell_price = hist.suggested_sell_price
+            history_insufficient = hist.history_insufficient
+            if hist.is_stable:
+                score = min(100, score + self.stability_weight)
+
+        weighted_ratio = compute_weighted_ratio(ext_price, steam_buy_order, steam_sell_listing, hist)
 
         return ScoredOpportunity(
             market_hash_name=name,
-            buy_price=buy_price,
-            sell_price=sell_price,
-            net_sell=net_sell,
-            profit=profit,
-            roi=roi,
+            buy_price=ext_price,
+            buy_market=buy_market,
+            steam_buy_order=steam_buy_order,
+            steam_sell_listing=steam_sell_listing,
+            sell_price=steam_sell_listing,
+            net_sell=net_optimistic,
+            roi_realistic=roi_realistic,
+            roi_optimistic=roi_optimistic,
+            roi=roi_realistic,
+            net_profit_usd=net_profit_usd,
+            profit=net_profit_usd,
             volume_24h=volume_24h,
             score=score,
             sources=sources,
             reason=reason,
+            incomplete=incomplete,
+            qty_unknown=qty_unknown,
+            is_stable=is_stable,
+            stability_cv=stability_cv,
+            suggested_sell_price=suggested_sell_price,
+            history_insufficient=history_insufficient,
+            weighted_ratio=weighted_ratio,
             updated_at=updated_at,
         )
 
-    # ------------------------------------------------------------------
-    # Scoring helpers
-    # ------------------------------------------------------------------
+    # ── Scoring helpers ────────────────────────────────────────────────────────
 
     def _roi_score(self, roi: float | None) -> int:
         if roi is None or roi < 0:
@@ -137,6 +182,7 @@ class Scorer:
         buy_price: float | None,
         sell_price: float | None,
         volume_24h: int | None,
+        steam_buy_order: float | None,
     ) -> int:
         penalty = 0
         if volume_24h is None:
@@ -147,17 +193,21 @@ class Scorer:
             penalty += 50
         if buy_price is None:
             penalty += 50
+        if steam_buy_order is None:
+            penalty += 20
         return penalty
 
     def _reason(
         self,
-        roi: float | None,
+        roi_realistic: float | None,
+        roi_optimistic: float | None,
         volume_24h: int | None,
         buy_price: float | None,
-        sell_price: float | None,
+        steam_buy_order: float | None,
     ) -> str:
         parts: list[str] = []
 
+        roi = roi_realistic if roi_realistic is not None else roi_optimistic
         if roi is not None:
             if roi > 0.05:
                 parts.append("high ROI >5%")
@@ -172,6 +222,9 @@ class Scorer:
         else:
             parts.append("ROI unknown")
 
+        if roi_realistic is None and roi_optimistic is not None:
+            parts.append("no buy order (optimistic only)")
+
         if volume_24h is not None:
             if volume_24h >= 200:
                 parts.append("high volume")
@@ -185,8 +238,8 @@ class Scorer:
             parts.append("no volume data")
 
         if buy_price is None:
-            parts.append("no buy price")
-        if sell_price is None:
-            parts.append("no sell price")
+            parts.append("no external price")
+        if steam_buy_order is None:
+            parts.append("no cashout data")
 
         return ", ".join(parts)

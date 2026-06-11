@@ -88,6 +88,12 @@ class SteamWebAPISource(MarketSource):
                         )
                         await asyncio.sleep(backoff)
                         continue
+                    if resp.status == 402:
+                        logger.error(
+                            "[steamwebapi] HTTP 402 Payment Required — "
+                            "this endpoint requires a paid SteamWebAPI plan"
+                        )
+                        return None
                     if resp.status in (401, 403):
                         logger.error(
                             "[steamwebapi] Auth error HTTP %d — check STEAMWEBAPI_KEY",

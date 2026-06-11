@@ -1,0 +1,33 @@
+[
+  {
+    "market_hash_name": "AK-47 | Redline (Field-Tested)",
+    "pricelatest": 10.2,
+    "pricereal": 8.4,
+    "buyorderprice": 9.85,
+    "sold24h": 142,
+    "sold7d": 980,
+    "offervolume": 310,
+    "priceupdatedat": "2026-06-10T12:01:30Z"
+  },
+  {
+    "name": "AWP | Asiimov (Field-Tested)",
+    "pricelatest": 95.5,
+    "pricereal": 82.0,
+    "buyorderprice": null,
+    "sold24h": 38,
+    "sold7d": 250,
+    "offervolume": 118,
+    "priceupdatedat": "2026-06-10 12:01:30"
+  },
+  {
+    "market_hash_name": "Glock-18 | Garbage Data",
+    "pricelatest": "not-a-number",
+    "pricereal": -5,
+    "buyorderprice": 0,
+    "sold24h": "abc"
+  },
+  {
+    "pricelatest": 1.0,
+    "pricereal": 0.9
+  }
+]

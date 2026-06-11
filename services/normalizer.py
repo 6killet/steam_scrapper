@@ -86,15 +86,18 @@ class Normalizer:
 
         # Find the cheapest non-Steam marketplace price.
         non_steam_keys = ["buff163", "buff", "skinport", "csfloat", "waxpeer"]
-        buy_candidates: list[float] = []
+        buy_candidates: list[tuple[float, str]] = []
         for key in non_steam_keys:
             src = prices.get(key)
             if isinstance(src, dict):
                 p = _flt(src.get("price"), divisor=100.0)
                 if p:
-                    buy_candidates.append(p)
+                    buy_candidates.append((p, key))
 
-        buy_price = min(buy_candidates) if buy_candidates else steam_price
+        if buy_candidates:
+            buy_price, buy_market = min(buy_candidates, key=lambda x: x[0])
+        else:
+            buy_price, buy_market = steam_price, None
         listings_count = _int_(steam.get("count"))
 
         updated_str = steam.get("updatedAt") or next(
@@ -106,6 +109,7 @@ class Normalizer:
             source="pricempire",
             market_hash_name=name,
             buy_price=buy_price,
+            buy_market=buy_market,
             sell_price=steam_price,
             steam_price=steam_price,
             listings_count=listings_count,
@@ -121,11 +125,12 @@ class Normalizer:
         if not name:
             return None
 
-        # pricelatest  = lowest current Steam listing  (our sell target)
-        # pricereal    = lowest third-party price       (our buy candidate)
-        # buyorderprice = highest active Steam buy order
+        # pricelatest   = lowest current Steam listing (sell target / buyer pays)
+        # pricereal     = lowest third-party price     (external buy candidate)
+        # buyorderprice = highest active Steam buy order (instant cashout)
         sell_price = _flt(item.get("pricelatest"))
-        buy_price = _flt(item.get("pricereal")) or _flt(item.get("buyorderprice"))
+        buy_price = _flt(item.get("pricereal"))
+        steam_buy_order = _flt(item.get("buyorderprice"))
 
         return MarketPrice(
             source="steamwebapi",
@@ -133,6 +138,7 @@ class Normalizer:
             buy_price=buy_price,
             sell_price=sell_price,
             steam_price=sell_price,
+            steam_buy_order=steam_buy_order,
             volume_24h=_int_(item.get("sold24h")),
             volume_7d=_int_(item.get("sold7d")),
             listings_count=_int_(item.get("offervolume")),
@@ -149,32 +155,60 @@ class Normalizer:
             return None
 
         steam = item.get("steam") or {}
-        buff = item.get("buff") or {}
         skinport = item.get("skinport") or {}
 
-        # Steam ask = lowest listing on Steam Market (sell target)
+        # Steam ask = lowest listing on Steam Market (sell target / buyer pays)
         sell_price = _flt(steam.get("ask"))
 
-        # Cheapest external marketplace ask (buy source)
-        buy_candidates: list[float] = []
-        for src in (buff, skinport):
+        # Steam bid = highest active Steam buy order (instant cashout)
+        steam_buy_order = _flt(steam.get("bid"))
+
+        # Steam bid_volume = quantity in active buy orders (for reliability filter)
+        buy_order_qty = _int_(steam.get("bid_volume"))
+
+        # Cheapest external marketplace ask (buy source).
+        # "buff" is normalised to "buff163" for consistency with Pricempire.
+        buy_candidates: list[tuple[float, str]] = []
+        for market_name, key in (
+            ("buff163", "buff"),
+            ("skinport", "skinport"),
+            ("csfloat", "csfloat"),
+            ("youpin", "youpin"),
+            ("c5game", "c5game"),
+        ):
+            src = item.get(key) or {}
             p = _flt(src.get("ask"))
             if p:
-                buy_candidates.append(p)
-        buy_price = min(buy_candidates) if buy_candidates else None
+                buy_candidates.append((p, market_name))
+        if buy_candidates:
+            buy_price, buy_market = min(buy_candidates, key=lambda x: x[0])
+        else:
+            buy_price, buy_market = None, None
+
+        # cs2.sh has no Steam sales volume; skinport's sales history is the only
+        # real turnover figure available, so it serves as the liquidity proxy.
+        h24 = skinport.get("24h_history") or {}
+        h7 = skinport.get("7d_history") or {}
+        volume_24h = _int_(h24.get("volume"))
+        volume_7d = _int_(h7.get("volume"))
 
         updated_str = (
             steam.get("updated_at")
             or steam.get("collected_at")
-            or buff.get("updated_at")
+            or (item.get("buff") or {}).get("updated_at")
         )
 
         return MarketPrice(
             source="cs2sh",
             market_hash_name=name,
             buy_price=buy_price,
+            buy_market=buy_market,
             sell_price=sell_price,
             steam_price=sell_price,
+            steam_buy_order=steam_buy_order,
+            buy_order_qty=buy_order_qty,
+            volume_24h=volume_24h,
+            volume_7d=volume_7d,
             listings_count=_int_(steam.get("ask_volume")),
             updated_at=_dt(updated_str),
             raw=item,

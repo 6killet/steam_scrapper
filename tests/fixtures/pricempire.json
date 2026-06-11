@@ -1,0 +1,30 @@
+[
+  {
+    "market_hash_name": "AK-47 | Redline (Field-Tested)",
+    "prices": {
+      "steam": {"price": 1020, "count": 312, "updatedAt": "2026-06-10T12:00:00Z"},
+      "buff163": {"price": 840, "count": 95, "updatedAt": "2026-06-10T11:58:00Z"},
+      "skinport": {"price": 905, "count": 14, "updatedAt": "2026-06-10T11:50:00Z"},
+      "csfloat": {"price": 880, "count": 22, "updatedAt": "2026-06-10T11:55:00Z"}
+    }
+  },
+  {
+    "market_hash_name": "AWP | Asiimov (Field-Tested)",
+    "prices": {
+      "steam": {"price": 9550, "count": 120, "updatedAt": "2026-06-10T12:00:00Z"},
+      "waxpeer": {"price": 8200, "count": 7, "updatedAt": "2026-06-10T11:40:00Z"}
+    }
+  },
+  {
+    "market_hash_name": "Sticker | Only Steam Price",
+    "prices": {
+      "steam": {"price": 150, "count": 40, "updatedAt": "2026-06-10T12:00:00Z"}
+    }
+  },
+  {
+    "market_hash_name": "Broken | Zero Price",
+    "prices": {
+      "steam": {"price": 0, "count": 0, "updatedAt": "2026-06-10T12:00:00Z"}
+    }
+  }
+]
