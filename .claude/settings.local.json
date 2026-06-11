@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:cs2.sh)",
+      "WebSearch",
+      "WebFetch(domain:developers.pricempire.com)",
+      "WebFetch(domain:www.steamwebapi.com)"
+    ]
+  }
+}

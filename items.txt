@@ -1,0 +1,24 @@
+# CS2 items to analyse — one market_hash_name per line.
+# Lines starting with '#' are ignored.
+# Use exact Steam market names (case-sensitive).
+
+AK-47 | Redline (Field-Tested)
+AK-47 | Vulcan (Minimal Wear)
+AK-47 | Asiimov (Field-Tested)
+AWP | Asiimov (Field-Tested)
+AWP | Lightning Strike (Factory New)
+AWP | Medusa (Field-Tested)
+M4A4 | Howl (Field-Tested)
+M4A1-S | Hot Rod (Factory New)
+M4A1-S | Cyrex (Field-Tested)
+USP-S | Kill Confirmed (Field-Tested)
+Glock-18 | Fade (Factory New)
+Desert Eagle | Blaze (Factory New)
+Desert Eagle | Cobalt Disruption (Factory New)
+StatTrak™ AK-47 | Redline (Field-Tested)
+StatTrak™ M4A1-S | Cyrex (Field-Tested)
+Butterfly Knife | Fade (Factory New)
+Karambit | Fade (Factory New)
+M9 Bayonet | Doppler (Factory New)
+Bayonet | Tiger Tooth (Factory New)
+Flip Knife | Marble Fade (Factory New)
